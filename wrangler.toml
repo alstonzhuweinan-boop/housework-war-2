@@ -4,15 +4,10 @@
 name = "housework-war"
 compatibility_date = "2025-03-13"
 
+# Build configuration
 [build]
 command = "npm run build"
-output_directory = "dist"
 
-# SPA fallback - redirect all routes to index.html
-[[redirects]]
-from = "/*"
-to = "/index.html"
-status = 200
-
+# Site configuration - points to the built files
 [site]
 bucket = "dist"
