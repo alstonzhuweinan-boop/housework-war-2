@@ -38,11 +38,10 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
 function FamilyRoute({ children }: { children: React.ReactNode }) {
   const { user, loading: authLoading } = useAuth();
-  const { family, loading: familyLoading } = useFamily();
+  const { loading: familyLoading } = useFamily();
   
   if (authLoading || familyLoading) return <LoadingScreen />;
   if (!user) return <Navigate to="/login" />;
-  if (!family) return <LoadingScreen />;
   
   return <>{children}</>;
 }
