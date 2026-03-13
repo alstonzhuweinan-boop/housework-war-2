@@ -1,9 +1,0 @@
-{
-  "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "housework-war",
-  "compatibility_date": "2025-03-13",
-  "assets": {
-    "directory": "dist",
-    "not_found_handling": "single-page-application"
-  }
-}
