@@ -1,9 +1,7 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
-import { db } from '../firebase';
-import { collection, query, where, onSnapshot, doc, getDoc, setDoc, addDoc, updateDoc, deleteDoc, serverTimestamp, orderBy, limit } from 'firebase/firestore';
+import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { useAuth } from './AuthContext';
-import { Family, Chore, Record } from '../types';
-import { handleFirestoreError, OperationType } from '../utils/errorHandling';
+import { Chore, Family, Record } from '../types';
+import { supabase, assertSupabaseConfigured } from '../supabase';
 
 interface FamilyContextType {
   family: Family | null;
@@ -19,6 +17,37 @@ interface FamilyContextType {
 
 const FamilyContext = createContext<FamilyContextType | undefined>(undefined);
 
+function mapFamily(row: any): Family {
+  return {
+    id: row.id,
+    name: row.name || '我们的家 🏡',
+    createdAt: new Date(row.created_at || Date.now()),
+  };
+}
+
+function mapChore(row: any): Chore {
+  return {
+    id: row.id,
+    familyId: row.family_id,
+    name: row.name,
+    points: Number(row.points || 0),
+    icon: row.icon || 'CheckCircle',
+  };
+}
+
+function mapRecord(row: any): Record {
+  return {
+    id: row.id,
+    familyId: row.family_id,
+    choreId: row.chore_id || '',
+    choreName: row.chore_name || '',
+    points: Number(row.points || 0),
+    userId: row.user_id || '',
+    userName: row.user_name || '',
+    timestamp: new Date(row.timestamp || row.created_at || Date.now()),
+  };
+}
+
 export function FamilyProvider({ children }: { children: React.ReactNode }) {
   const { user } = useAuth();
   const [family, setFamily] = useState<Family | null>(null);
@@ -26,8 +55,10 @@ export function FamilyProvider({ children }: { children: React.ReactNode }) {
   const [records, setRecords] = useState<Record[]>([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    if (!user?.familyId) {
+  const familyId = useMemo(() => user?.familyId || 'family_dd_qq', [user?.familyId]);
+
+  const refreshAll = async () => {
+    if (!user) {
       setFamily(null);
       setChores([]);
       setRecords([]);
@@ -35,122 +66,162 @@ export function FamilyProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
+    assertSupabaseConfigured();
     setLoading(true);
-    let unsubFamily: () => void;
-    let unsubChores: () => void;
-    let unsubRecords: () => void;
 
-    // Listen to family
-    unsubFamily = onSnapshot(doc(db, 'families', user.familyId), (docSnap) => {
-      if (docSnap.exists()) {
-        setFamily({ id: docSnap.id, ...docSnap.data() } as Family);
+    try {
+      // Fetch family
+      const { data: familyData } = await supabase
+        .from('families')
+        .select('*')
+        .eq('id', familyId)
+        .single();
+
+      if (familyData) {
+        setFamily(mapFamily(familyData));
       }
-    }, (error) => {
-      handleFirestoreError(error, OperationType.GET, `families/${user.familyId}`);
-    });
 
-    // Listen to chores
-    const choresQuery = query(collection(db, 'chores'), where('familyId', '==', user.familyId));
-    unsubChores = onSnapshot(choresQuery, (snapshot) => {
-      const choresData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Chore));
-      setChores(choresData);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.GET, 'chores');
-    });
+      // Fetch chores
+      const { data: choresData } = await supabase
+        .from('chores')
+        .select('*')
+        .eq('family_id', familyId);
 
-    // Listen to records (last 100 for now)
-    const recordsQuery = query(
-      collection(db, 'records'), 
-      where('familyId', '==', user.familyId),
-      orderBy('timestamp', 'desc'),
-      limit(100)
-    );
-    unsubRecords = onSnapshot(recordsQuery, (snapshot) => {
-      const recordsData = snapshot.docs.map(doc => {
-        const data = doc.data();
-        return {
-          id: doc.id,
-          ...data,
-          timestamp: data.timestamp?.toDate() || new Date(),
-        } as Record;
-      });
-      setRecords(recordsData);
+      if (choresData) {
+        setChores(choresData.map(mapChore));
+      }
+
+      // Fetch records (last 100)
+      const { data: recordsData } = await supabase
+        .from('records')
+        .select('*')
+        .eq('family_id', familyId)
+        .order('timestamp', { ascending: false })
+        .limit(100);
+
+      if (recordsData) {
+        setRecords(recordsData.map(mapRecord));
+      }
+    } catch (error) {
+      console.error('Failed to load data from Supabase:', error);
+    } finally {
       setLoading(false);
-    }, (error) => {
-      setLoading(false);
-      handleFirestoreError(error, OperationType.GET, 'records');
-    });
+    }
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      await refreshAll();
+    })();
+
+    // Set up realtime subscriptions
+    if (!user) return;
+
+    const choresChannel = supabase
+      .channel('chores-changes')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'chores', filter: `family_id=eq.${familyId}` },
+        () => {
+          if (!cancelled) refreshAll();
+        }
+      )
+      .subscribe();
+
+    const recordsChannel = supabase
+      .channel('records-changes')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'records', filter: `family_id=eq.${familyId}` },
+        () => {
+          if (!cancelled) refreshAll();
+        }
+      )
+      .subscribe();
 
     return () => {
-      if (unsubFamily) unsubFamily();
-      if (unsubChores) unsubChores();
-      if (unsubRecords) unsubRecords();
+      cancelled = true;
+      supabase.removeChannel(choresChannel);
+      supabase.removeChannel(recordsChannel);
     };
-  }, [user?.familyId]);
+  }, [user?.uid, familyId]);
 
   const addChore = async (chore: Omit<Chore, 'id' | 'familyId'>) => {
-    if (!user?.familyId) {
-      alert('无法获取家庭ID，请刷新页面重试');
-      return;
-    }
-    try {
-      await addDoc(collection(db, 'chores'), {
-        ...chore,
-        familyId: user.familyId,
-      });
-    } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, 'chores');
+    if (!user) return;
+    assertSupabaseConfigured();
+
+    const { data } = await supabase.from('chores').insert({
+      family_id: familyId,
+      name: chore.name,
+      points: chore.points,
+      icon: chore.icon,
+    }).select().single();
+
+    if (data) {
+      setChores((prev) => [...prev, mapChore(data)]);
     }
   };
 
   const editChore = async (choreId: string, updates: Partial<Omit<Chore, 'id' | 'familyId'>>) => {
-    if (!user?.familyId) return;
-    try {
-      const choreRef = doc(db, 'chores', choreId);
-      await updateDoc(choreRef, updates);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `chores/${choreId}`);
-    }
+    if (!user) return;
+    assertSupabaseConfigured();
+
+    await supabase
+      .from('chores')
+      .update({
+        name: updates.name,
+        points: updates.points,
+        icon: updates.icon,
+      })
+      .eq('id', choreId);
+
+    setChores((prev) =>
+      prev.map((item) => (item.id === choreId ? { ...item, ...updates } : item))
+    );
   };
 
   const deleteChore = async (choreId: string) => {
-    if (!user?.familyId) return;
-    try {
-      const choreRef = doc(db, 'chores', choreId);
-      await deleteDoc(choreRef);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, `chores/${choreId}`);
-    }
+    if (!user) return;
+    assertSupabaseConfigured();
+
+    await supabase.from('chores').delete().eq('id', choreId);
+    setChores((prev) => prev.filter((item) => item.id !== choreId));
+    setRecords((prev) => prev.filter((item) => item.choreId !== choreId));
   };
 
   const recordChore = async (chore: Chore) => {
-    if (!user?.familyId) return;
-    try {
-      await addDoc(collection(db, 'records'), {
-        familyId: user.familyId,
-        choreId: chore.id,
-        choreName: chore.name,
-        points: chore.points,
-        userId: user.uid,
-        userName: user.displayName,
-        timestamp: serverTimestamp(),
-      });
-    } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, 'records');
+    if (!user) return;
+    assertSupabaseConfigured();
+
+    const { data } = await supabase.from('records').insert({
+      family_id: familyId,
+      chore_id: chore.id,
+      chore_name: chore.name,
+      points: chore.points,
+      user_id: user.uid,
+      user_name: user.displayName,
+      timestamp: new Date().toISOString(),
+    }).select().single();
+
+    if (data) {
+      setRecords((prev) => [mapRecord(data), ...prev]);
     }
   };
 
   const deleteRecord = async (recordId: string) => {
-    if (!user?.familyId) return;
-    try {
-      await deleteDoc(doc(db, 'records', recordId));
-    } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, `records/${recordId}`);
-    }
+    if (!user) return;
+    assertSupabaseConfigured();
+
+    await supabase.from('records').delete().eq('id', recordId);
+    setRecords((prev) => prev.filter((item) => item.id !== recordId));
   };
 
   return (
-    <FamilyContext.Provider value={{ family, chores, records, loading, addChore, editChore, deleteChore, recordChore, deleteRecord }}>
+    <FamilyContext.Provider
+      value={{ family, chores, records, loading, addChore, editChore, deleteChore, recordChore, deleteRecord }}
+    >
       {children}
     </FamilyContext.Provider>
   );
@@ -159,7 +230,7 @@ export function FamilyProvider({ children }: { children: React.ReactNode }) {
 export function useFamily() {
   const context = useContext(FamilyContext);
   if (context === undefined) {
-    throw new Error('useFamily must be used within a FamilyProvider');
+    throw new Error('useFamily must be used within an FamilyProvider');
   }
   return context;
 }
