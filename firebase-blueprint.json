@@ -1,0 +1,72 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "A user of the chore app.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "displayName": { "type": "string" },
+        "email": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "familyId": { "type": "string", "description": "ID of the family this user belongs to." }
+      },
+      "required": ["uid", "displayName", "email"]
+    },
+    "Family": {
+      "title": "Family",
+      "description": "A group of users (e.g., a couple).",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "createdAt"]
+    },
+    "Chore": {
+      "title": "Chore",
+      "description": "A preset chore type.",
+      "type": "object",
+      "properties": {
+        "familyId": { "type": "string" },
+        "name": { "type": "string" },
+        "points": { "type": "number" },
+        "icon": { "type": "string" }
+      },
+      "required": ["familyId", "name", "points", "icon"]
+    },
+    "Record": {
+      "title": "Record",
+      "description": "A log of a completed chore.",
+      "type": "object",
+      "properties": {
+        "familyId": { "type": "string" },
+        "choreId": { "type": "string" },
+        "choreName": { "type": "string" },
+        "points": { "type": "number" },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["familyId", "choreId", "choreName", "points", "userId", "userName", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "User profiles."
+    },
+    "/families/{familyId}": {
+      "schema": { "$ref": "#/entities/Family" },
+      "description": "Families/Couples."
+    },
+    "/chores/{choreId}": {
+      "schema": { "$ref": "#/entities/Chore" },
+      "description": "Preset chores for a family."
+    },
+    "/records/{recordId}": {
+      "schema": { "$ref": "#/entities/Record" },
+      "description": "Completed chore records."
+    }
+  }
+}

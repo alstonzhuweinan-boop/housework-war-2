@@ -1,0 +1,18 @@
+# Cloudflare Pages Configuration
+# This file configures the build settings for Cloudflare Pages
+
+name = "housework-war"
+compatibility_date = "2025-03-13"
+
+[build]
+command = "npm run build"
+output_directory = "dist"
+
+# SPA fallback - redirect all routes to index.html
+[[redirects]]
+from = "/*"
+to = "/index.html"
+status = 200
+
+[site]
+bucket = "dist"
